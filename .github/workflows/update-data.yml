@@ -1,0 +1,77 @@
+name: Scrape latest data
+
+on:
+  push:
+  workflow_dispatch:
+  schedule:
+    - cron:  '6,26,46 * * * *'
+
+jobs:
+  scheduled:
+    runs-on: macos-latest
+    steps:
+    - name: Check out this repo
+      uses: actions/checkout@v2
+    - name: Set up Python
+      uses: actions/setup-python@v1
+      with:
+        python-version: 3.8
+    - uses: actions/cache@v1
+      name: Configure pip caching
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('**/setup.py') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+    - name: Install Python dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install sqlite-utils>=3.1
+        sqlite-utils --version
+        pip install -e .
+    - name: Fetch latest data
+      run: |-
+        # lewisham id from mapit.mysociety
+        mapitID=2492 \
+
+        # oldest lewisham date in fms is 2007-03-05
+
+        # use this old date to collect everything
+        # first_request_date=`date -j -f "%F" 2007-03-05 +"%s"` \
+
+        # use this date to upsert recent stuff only, updating/inserting records from last week
+        first_request_date=`date -v-8d +"%s"` \
+
+        # setup counter
+        (( c=1 ))
+
+        from=`date -v-"${c}"w +"%s"`
+        to=`date +"%s"`
+
+        while [[ $from > $first_request_date ]]; do
+          start_date=`date -j -f "%s" $from "+%Y-%m-%d"`
+          end_date=`date -j -f "%s" $to "+%Y-%m-%d"`
+          echo $start_date - $end_date
+
+            curl "https://www.fixmystreet.com/open311/v2/requests.json?jurisdiction_id=fixmystreet&agency_responsible=$mapitID&start_date=$start_date&end_date=$end_date" | \
+            # flatten json
+            jq .service_requests | jq '
+                [.[] | 
+                [leaf_paths as $path | {"key": $path | join("_"), "value": getpath($path)}]
+                | from_entries]
+            ' | \
+            sqlite-utils upsert ./fms-history.db requests - --pk=service_request_id
+          # move back in time week-by-week
+          to=`date -v-"${c}"w +"%s"`
+          (( c=c+1 ))
+          from=`date -v-"${c}"w +"%s"`
+        done
+
+    - name: Commit and push if it changed
+      run: |-
+        git config user.name "Automated"
+        git config user.email "actions@users.noreply.github.com"
+        git add -A
+        timestamp=$(date -u)
+        git commit -m "Latest data: ${timestamp}" || exit 0
+        git push
