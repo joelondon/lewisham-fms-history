@@ -19,7 +19,7 @@ jobs:
         key: ${{ runner.os }}-pip-${{ hashFiles('**/setup.py') }}
         restore-keys: |
           ${{ runner.os }}-pip-
-    - name: Install Python dependencies
+    - name: Check python version
       run: |
       python -v
     - name: Install Python dependencies
